@@ -1156,8 +1156,14 @@ function captureAttendanceLocation(isManualTrigger = false) {
         (pos) => {
             const lat = pos.coords.latitude.toFixed(6);
             const lng = pos.coords.longitude.toFixed(6);
-            currentLocationData = { lat, lng, url: `https://maps.google.com/?q=${lat},${lng}` };
-            statusEl.innerHTML = `<span class="text-emerald-700 font-semibold">GPS Aktif: ${lat}, ${lng}</span> <a href="${currentLocationData.url}" target="_blank" class="underline text-sky-700 ml-1">Lihat Peta</a>`;
+            const accuracy = Math.round(pos.coords.accuracy || 0);
+            currentLocationData = {
+                lat,
+                lng,
+                accuracy,
+                url: `https://maps.google.com/?q=${lat},${lng}`
+            };
+            statusEl.innerHTML = `<span class="text-emerald-700 font-semibold">GPS Aktif: ${lat}, ${lng} (±${accuracy}m)</span> <a href="${currentLocationData.url}" target="_blank" rel="noopener" class="underline text-sky-700 ml-1 font-semibold">Lihat Peta ↗</a>`;
             if (isManualTrigger) showToast('Koordinat lokasi GPS berhasil diperbarui', 'success');
         },
         () => {
@@ -1337,7 +1343,8 @@ async function saveAttendanceAndJournal(e) {
         if (st !== 'H') absentDetails.push(`${s.name} (${st})`);
     });
 
-    let locationSummary = manualLoc || `Ruang Kelas ${currentClass}`;
+    const roomLabel = manualLoc || `Ruang Kelas ${currentClass}`;
+    let locationSummary = roomLabel;
     if (currentLocationData) {
         locationSummary += ` [GPS: ${currentLocationData.lat}, ${currentLocationData.lng}]`;
     }
@@ -1356,7 +1363,12 @@ async function saveAttendanceAndJournal(e) {
         topic,
         activity,
         notes,
+        roomLocation: roomLabel,
         location: locationSummary,
+        gpsCoordinates: currentLocationData ? `${currentLocationData.lat}, ${currentLocationData.lng}` : '',
+        gpsLat: currentLocationData ? currentLocationData.lat : '',
+        gpsLng: currentLocationData ? currentLocationData.lng : '',
+        gpsAccuracy: currentLocationData ? currentLocationData.accuracy : null,
         mapUrl: currentLocationData ? currentLocationData.url : '',
         attendanceSummary: summary,
         absentDetails: absentDetails.join(', ') || 'Nihil (Hadir Semua)',
@@ -1648,6 +1660,45 @@ function getFilteredTeacherJournals() {
     });
 }
 
+function renderJournalLocationCell(j) {
+    const rawLoc = String(j.location || '').trim();
+    const gpsMatch = rawLoc.match(/\[GPS:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\]/i);
+    const lat = j.gpsLat || (gpsMatch ? gpsMatch[1] : '');
+    const lng = j.gpsLng || (gpsMatch ? gpsMatch[2] : '');
+    const coords = j.gpsCoordinates || (lat && lng ? `${lat}, ${lng}` : '');
+    const mapUrl = j.mapUrl || (coords ? `https://maps.google.com/?q=${coords.replace(/\s+/g, '')}` : '');
+    const cleanRoomText = j.roomLocation || rawLoc.replace(/\s*\[GPS:[^\]]+\]/i, '').trim() || `Ruang Kelas ${j.className || '-'}`;
+
+    if (coords && mapUrl) {
+        const accLabel = j.gpsAccuracy ? ` (±${j.gpsAccuracy}m)` : '';
+        return `
+            <div class="text-slate-600">${j.notes || '-'}</div>
+            <div class="mt-1.5 p-2 rounded-lg bg-sky-50/80 border border-sky-200/80 space-y-1">
+                <div class="text-[11px] font-semibold text-slate-700 flex items-center gap-1">
+                    <i data-lucide="building-2" class="w-3 h-3 text-slate-500 shrink-0"></i>
+                    <span>${cleanRoomText}</span>
+                </div>
+                <div class="text-[11px] font-mono text-emerald-700 font-semibold flex items-center gap-1">
+                    <i data-lucide="map-pin" class="w-3 h-3 text-emerald-600 shrink-0"></i>
+                    <span>${coords}${accLabel}</span>
+                </div>
+                <a href="${mapUrl}" target="_blank" rel="noopener" class="no-print inline-flex items-center gap-1 text-[11px] font-bold text-sky-700 hover:text-sky-800 bg-white hover:bg-sky-100 border border-sky-200 px-2 py-0.5 rounded-md transition-colors">
+                    <i data-lucide="external-link" class="w-3 h-3"></i>
+                    <span>Lihat Peta</span>
+                </a>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="text-slate-600">${j.notes || '-'}</div>
+        <div class="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+            <i data-lucide="map-pin" class="w-3 h-3 text-slate-400 shrink-0"></i>
+            <span>${cleanRoomText} <span class="italic text-slate-400">(Tanpa GPS)</span></span>
+        </div>
+    `;
+}
+
 function renderJournalRecap() {
     const madFilter = document.getElementById('jurnal-madrasah-filter')?.value || 'ALL';
     const clsFilter = document.getElementById('jurnal-class-filter')?.value || 'ALL';
@@ -1709,8 +1760,7 @@ function renderJournalRecap() {
                     <div class="text-[11px] mt-1 leading-snug">${absentText}</div>
                 </td>
                 <td class="py-3.5 px-4 text-xs">
-                    <div class="text-slate-600">${j.notes || '-'}</div>
-                    <div class="text-[11px] text-sky-700 mt-1">${j.location || ''}</div>
+                    ${renderJournalLocationCell(j)}
                 </td>
                 <td class="py-3.5 px-4 text-center no-print">
                     <button type="button" onclick="deleteJournal('${j.id}')" class="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg" title="Hapus Jurnal">
@@ -1951,6 +2001,7 @@ function renderTeacherClassRecap() {
                     <td class="py-3 px-4 text-xs">
                         <div class="font-semibold text-slate-700">H:${sum.H} S:${sum.S} I:${sum.I} A:${sum.A}</div>
                         <div class="text-[11px] text-sky-700 mt-0.5">${j.location || '-'}</div>
+                        ${j.mapUrl ? `<a href="${j.mapUrl}" target="_blank" rel="noopener" class="no-print inline-block text-[11px] font-semibold text-emerald-700 underline mt-0.5">Lihat Peta ↗</a>` : ''}
                     </td>
                     <td class="py-3 px-4 text-center no-print">
                         <button type="button" onclick="deleteJournal('${j.id}')" class="text-rose-500 hover:bg-rose-50 p-1.5 rounded-lg" title="Hapus Data Guru Masuk Kelas">
@@ -3003,7 +3054,6 @@ function downloadCSVFile(filename, csvContent) {
         link.click();
         link.remove();
 
-        // Siapkan juga modal cadangan jika unduhan otomatis diblokir iframe/webview
         const directLink = document.getElementById('csv-direct-download-link');
         const textarea = document.getElementById('csv-export-textarea');
         if (directLink) {
@@ -3057,11 +3107,17 @@ function exportAttendanceCSV() {
 function exportJournalCSV() {
     const list = getFilteredArchiveJournals();
     const rows = [
-        ['No', 'Tanggal', 'Jam Ke', 'Unit', 'Kelas', 'Guru Pengajar', 'Mata Pelajaran', 'Materi Pokok', 'Kegiatan Pembelajaran', 'Rekap Absen', 'Siswa Tidak Hadir', 'Catatan', 'Lokasi']
+        ['No', 'Tanggal', 'Jam Ke', 'Unit', 'Kelas', 'Guru Pengajar', 'Mata Pelajaran', 'Materi Pokok', 'Kegiatan Pembelajaran', 'Rekap Absen', 'Siswa Tidak Hadir', 'Catatan', 'Ruang / Lokasi', 'Koordinat GPS', 'Tautan Google Maps']
     ];
 
     list.forEach((j, idx) => {
         const sum = j.attendanceSummary || { H: 0, S: 0, I: 0, A: 0 };
+        const rawLoc = String(j.location || '').trim();
+        const gpsMatch = rawLoc.match(/\[GPS:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\]/i);
+        const coords = j.gpsCoordinates || (j.gpsLat && j.gpsLng ? `${j.gpsLat}, ${j.gpsLng}` : (gpsMatch ? `${gpsMatch[1]}, ${gpsMatch[2]}` : '-'));
+        const mapUrl = j.mapUrl || (coords !== '-' ? `https://maps.google.com/?q=${coords.replace(/\s+/g, '')}` : '-');
+        const cleanRoom = j.roomLocation || rawLoc.replace(/\s*\[GPS:[^\]]+\]/i, '').trim() || '-';
+
         rows.push([
             idx + 1,
             j.date || '',
@@ -3075,7 +3131,9 @@ function exportJournalCSV() {
             `H:${sum.H} S:${sum.S} I:${sum.I} A:${sum.A}`,
             j.absentDetails || '',
             j.notes || '',
-            j.location || ''
+            cleanRoom,
+            coords,
+            mapUrl
         ].map(escapeCSVCell));
     });
 
@@ -3087,7 +3145,7 @@ function exportJournalCSV() {
 function exportTeacherRecapCSV() {
     const list = getFilteredTeacherJournals();
     const rows = [
-        ['No', 'Tanggal', 'Jam Ke', 'Unit', 'Kelas', 'Nama Guru', 'Mata Pelajaran', 'Materi', 'Kehadiran', 'Lokasi']
+        ['No', 'Tanggal', 'Jam Ke', 'Unit', 'Kelas', 'Nama Guru', 'Mata Pelajaran', 'Materi', 'Kehadiran', 'Lokasi', 'Tautan Google Maps']
     ];
 
     list.forEach((j, idx) => {
@@ -3102,7 +3160,8 @@ function exportTeacherRecapCSV() {
             j.subject || '',
             j.topic || '',
             `H:${sum.H} S:${sum.S} I:${sum.I} A:${sum.A}`,
-            j.location || ''
+            j.location || '',
+            j.mapUrl || '-'
         ].map(escapeCSVCell));
     });
 
